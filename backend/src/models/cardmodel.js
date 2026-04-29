@@ -30,7 +30,6 @@ const cardSchema = new mongoose.Schema(
             completed: Boolean
         }
     ],
-
     order: {
         type: String
     },
