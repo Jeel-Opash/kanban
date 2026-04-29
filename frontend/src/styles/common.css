@@ -1,0 +1,139 @@
+:root {
+  --page-bg: #ffffff;
+  --text: #1e293b;
+  --muted: #64748b;
+  --primary: #2563eb;
+  --primary-dark: #1e40af;
+  --primary-soft: #e0e7ff;
+  --primary-light: #f8fafc;
+  --primary-border: #cbd5e1;
+  --heading: #0f172a;
+  --accent: #0f766e;
+  --danger: #dc2626;
+  --danger-dark: #b91c1c;
+  --error-bg: #fee2e2;
+  --error-text: #b91c1c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: var(--page-bg);
+  color: var(--text);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--primary);
+  color: white;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button:hover {
+  background: var(--primary-dark);
+}
+
+input,
+select {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--primary-border);
+  border-radius: 6px;
+  outline: none;
+}
+
+input:focus,
+select:focus {
+  border-color: var(--primary);
+}
+
+.form-field {
+  display: grid;
+  gap: 6px;
+}
+
+.form-field label {
+  color: var(--heading);
+  font-weight: 700;
+}
+
+.dashboard-page,
+.board-page,
+.profile-page {
+  min-height: 100%;
+  padding: 24px;
+}
+
+.dashboard-header,
+.board-header,
+.profile-header {
+  margin: 0 auto 16px;
+}
+
+.dashboard-header h1,
+.board-header h1,
+.profile-header h1 {
+  margin: 0;
+  color: var(--primary);
+}
+
+.board-header p,
+.profile-header p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.sidebar,
+.main-panel,
+.board-column,
+.profile-panel,
+.board-column-form {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: white;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+
+.sidebar h2,
+.main-panel h2,
+.main-panel h3,
+.board-column-header h2,
+.profile-panel h2 {
+  margin-top: 0;
+  color: var(--heading);
+}
+
+.message,
+.profile-message {
+  margin: 0 auto 16px;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--primary-soft);
+  color: var(--heading);
+}
+
+@media (max-width: 760px) {
+  .dashboard-page,
+  .board-page,
+  .profile-page {
+    padding: 14px;
+  }
+}
+
+
+
+
