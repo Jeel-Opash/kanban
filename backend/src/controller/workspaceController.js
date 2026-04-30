@@ -1,6 +1,7 @@
 const Workspace = require("../models/workspacemodel.js");
 const User = require("../models/usermodel.js");
 const asyncHandler = require("../middleware/asyncHandler");
+const { deny, requireWorkspaceRole } = require("../utils/permissions");
 
 
 exports.createWorkspace = asyncHandler(async (req, res) => {
@@ -32,15 +33,22 @@ res.json(workspaces);
 
 exports.inviteMember = asyncHandler(async (req,res)=>{
     const {workspaceId,email,role} = req.body;
+    const access = await requireWorkspaceRole(workspaceId, req.user.id, "Owner");
+    if (access.status) return deny(res, access);
     const user = await User.findOne({email});
     if(!user){
         return res.status(404).json({message:"User not found"});
     }
-    const workspace = await Workspace.findById(workspaceId);
-    workspace.members.push({
+    const workspace = access.workspace;
+    const existing = workspace.members.find((m) => m.user.toString() === user._id.toString());
+    if (existing) {
+        existing.role = role || existing.role;
+    } else {
+        workspace.members.push({
         user:user._id,
         role:role || "Viewer"
-    });
+        });
+    }
     await workspace.save();
 
     res.json({
@@ -52,7 +60,9 @@ exports.inviteMember = asyncHandler(async (req,res)=>{
 
 exports.removeMember = asyncHandler(async (req,res)=>{
     const {workspaceId,userId} = req.body;
-    const workspace = await Workspace.findById(workspaceId);
+    const access = await requireWorkspaceRole(workspaceId, req.user.id, "Owner");
+    if (access.status) return deny(res, access);
+    const workspace = access.workspace;
     workspace.members = workspace.members.filter(
         m => m.user.toString() !== userId);
     await workspace.save();

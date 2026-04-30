@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const Activity = require("../models/activitymodel.js");
 const Card = require("../models/cardmodel.js");
 const asyncHandler = require("../middleware/asyncHandler.js");
+const { deny, requireCardRole } = require("../utils/permissions.js");
 
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -22,6 +23,8 @@ exports.createActivity = asyncHandler(async (req, res) => {
   if (!card) {
     return res.status(404).json({ message: "Card not found" });
   }
+  const access = await requireCardRole(cardId, req.user.id, "Editor");
+  if (access.status) return deny(res, access);
 
   const activity = await Activity.create({
     card: cardId,
@@ -49,6 +52,15 @@ exports.getActivities = asyncHandler(async (req, res) => {
   res.json(activities);
 });
 
+exports.getActivitiesByCard = asyncHandler(async (req, res) => {
+  const { cardId } = req.params;
+  if (!isValidId(cardId)) return res.status(400).json({ message: "Invalid cardId" });
+  const access = await requireCardRole(cardId, req.user.id, "Viewer");
+  if (access.status) return deny(res, access);
+  const activities = await populateActivity(Activity.find({ card: cardId })).sort({ createdAt: -1 });
+  res.json(activities);
+});
+
 
 
 exports.getActivityById = asyncHandler(async (req, res) => {
@@ -62,6 +74,8 @@ exports.getActivityById = asyncHandler(async (req, res) => {
   if (!activity) {
     return res.status(404).json({ message: "Activity not found" });
   }
+  const access = await requireCardRole(activity.card._id, req.user.id, "Viewer");
+  if (access.status) return deny(res, access);
 
   res.json(activity);
 });

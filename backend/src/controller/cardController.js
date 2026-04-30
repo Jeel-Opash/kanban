@@ -2,207 +2,142 @@ const Card = require("../models/cardmodel");
 const Column = require("../models/columnmodel");
 const Activity = require("../models/activitymodel");
 const asyncHandler = require("../middleware/asyncHandler");
-const mongoose = require("mongoose");
-const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
-const normalizeIdArray = (value) => {
-  if (value == null) return [];
-  if (Array.isArray(value)) return value;
-  if (typeof value !== "string") return null;
+const { rankForIndex } = require("../utils/rank");
+const { deny, requireColumnRole, requireCardRole } = require("../utils/permissions");
+const { isValidId, normalizeIdArray, createActivity } = require("../utils/controllerHelper");
 
-  const raw = value.trim();
-  if (!raw) return [];
-  if (raw.startsWith("[") && raw.endsWith("]")) {
-    const inner = raw.slice(1, -1).trim();
-    if (!inner) return [];
-    return inner.split(",").map((v) => v.trim().replace(/^['"]|['"]$/g, ""));
-  }
-  return [raw.replace(/^['"]|['"]$/g, "")];
-};
- 
+const populatedCard = (query) => query.populate("assignees", "name email avatar");
+
 exports.createCard = asyncHandler(async (req, res) => {
-    const{title,description,columnId,labels,assignees,
-      dueDate,checklist,order} = req.body;
+  const { title, description, columnId, labels, assignees, dueDate, checklist, order } = req.body;
+  if (!title || !columnId || !isValidId(columnId)) 
+    return res.status(400).json({ message: "Invalid title or columnId" });
 
-    if (!title || !columnId) {
-      return res.status(400).json({
-        message: "title and columnId are required"
-      });
-    }
-    if (!isValidId(columnId)) {
-      return res.status(400).json({ message: "Invalid columnId" });
-    }
-    const column = await Column.findById(columnId);
-    if (!column) {
-      return res.status(404).json({ message: "Column not found" });
-    }
-    const normalizedAssignees = normalizeIdArray(assignees);
-    if (!normalizedAssignees || normalizedAssignees.some((id) => !isValidId(id))) {
-      return res.status(400).json({ message: "Invalid assignees: use Mongo ObjectId values" });
-    }
+  const access = await requireColumnRole(columnId, req.user.id, "Editor");
+  if (access.status) return deny(res, access);
 
-    const card = await Card.create({
-      title,description: description || "",
-      column: columnId,
-      labels: labels || [],
-      assignees: normalizedAssignees,dueDate,
-      checklist: checklist || [],order
-    });
+  const normalizedAssignees = normalizeIdArray(assignees);
+  if (!normalizedAssignees) return res.status(400).json({ message: "Invalid assignees" });
 
-    column.cardIds.push(card._id);
-    await column.save();
+  const siblings = await Card.find({ column: columnId }).sort({ order: 1 }).lean();
+  const card = await Card.create({
+    title,
+    description: description || "",
+    column: columnId,
+    labels: labels || [],
+    assignees: normalizedAssignees,
+    dueDate,
+    checklist: checklist || [],
+    order: order || rankForIndex(siblings, siblings.length)
+  });
 
-    await Activity.create({
-      card: card._id,user: req.user?.id,
-      action: "CARD_CREATED",details: `${card.title} created`});
+  await Column.findByIdAndUpdate(columnId, { $push: { cardIds: card._id } });
+  await createActivity(card, req.user.id, "CARD_CREATED", `${card.title} created`);
 
-    res.status(201).json({
-      message: "Card created",
-      card
-    });
+  const nextCard = await populatedCard(Card.findById(card._id));
+  req.app.get("io")?.to(`board:${access.board._id}`).emit("card:created", { card: nextCard });
+  res.status(201).json({ message: "Card created", card: nextCard });
 });
 
 exports.getCardsByColumn = asyncHandler(async (req, res) => {
-    const { columnId } = req.params;
-    if (!isValidId(columnId)) {
-      return res.status(400).json({ message: "Invalid columnId" });
-    }
+  const { columnId } = req.params;
+  if (!isValidId(columnId)) return res.status(400).json({ message: "Invalid columnId" });
+  const access = await requireColumnRole(columnId, req.user.id, "Viewer");
+  if (access.status) return deny(res, access);
 
-    const cards = await Card.find({ column: columnId })
-      .populate("assignees", "name email")
-      .sort({ createdAt: 1 });
-
-    res.json(cards);
+  const cards = await populatedCard(Card.find({ column: columnId })).sort({ order: 1 });
+  res.json(cards);
 });
 
 exports.getCardById = asyncHandler(async (req, res) => {
-    if (!isValidId(req.params.cardId)) {
-      return res.status(400).json({ message: "Invalid cardId" });
-    }
-    const card = await Card.findById(req.params.cardId).populate(
-      "assignees",
-      "name email"
-    );
-
-    if (!card) {
-      return res.status(404).json({ message: "Card not found" });
-    }
-
-    res.json(card);
+  const { cardId } = req.params;
+  if (!isValidId(cardId)) return res.status(400).json({ message: "Invalid cardId" });
+  const access = await requireCardRole(cardId, req.user.id, "Viewer");
+  if (access.status) return deny(res, access);
+  res.json(await populatedCard(Card.findById(cardId)));
 });
 
 exports.updateCard = asyncHandler(async (req, res) => {
-    if (!isValidId(req.params.cardId)) {
-      return res.status(400).json({ message: "Invalid cardId" });
-    }
-    const allowedFields = [
-      "title","description","labels","assignees","dueDate",
-      "checklist","order"];
+  const { cardId } = req.params;
+  if (!isValidId(cardId)) return res.status(400).json({ message: "Invalid cardId" });
+  const access = await requireCardRole(cardId, req.user.id, "Owner");
+  if (access.status) return deny(res, access);
 
-    const updates = {};
-    allowedFields.forEach((field) => {
-      if (Object.prototype.hasOwnProperty.call(req.body, field)) {
-        updates[field] = req.body[field];
-      }
-    });
-    if (Object.prototype.hasOwnProperty.call(updates, "assignees")) {
-      const normalizedAssignees = normalizeIdArray(updates.assignees);
-      if (!normalizedAssignees || normalizedAssignees.some((id) => !isValidId(id))) {
-        return res.status(400).json({ message: "Invalid assignees: use Mongo ObjectId values" });
-      }
-      updates.assignees = normalizedAssignees;
-    }
+  const expectedVersion = Number(req.body.version);
+  if (expectedVersion && expectedVersion !== access.card.version)
+    return res.status(409).json({ message: "Stale card version", card: access.card });
 
-    const card = await Card.findByIdAndUpdate(req.params.cardId, updates, {
-      new: true
-    }).populate("assignees", "name email");
+  const allowedFields = ["title", "description", "labels", "assignees", "dueDate", "checklist", "order"];
+  const updates = {};
+  allowedFields.forEach((f) => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
 
-    if (!card) {
-      return res.status(404).json({ message: "Card not found" });
-    }
+  if (updates.assignees !== undefined) {
+    const normalized = normalizeIdArray(updates.assignees);
+    if (!normalized) return res.status(400).json({ message: "Invalid assignees" });
+    updates.assignees = normalized;
+  }
 
-    await Activity.create({
-      card: card._id,
-      user: req.user?.id,
-      action: "CARD_UPDATED",
-      details: `${card.title} updated`
-    });
-
-    res.json({
-      message: "Card updated",card});
+  updates.version = access.card.version + 1;
+  const card = await populatedCard(Card.findByIdAndUpdate(cardId, updates, { new: true }));
+  await createActivity(card, req.user.id, "CARD_UPDATED", `${card.title} updated`);
+  req.app.get("io")?.to(`board:${access.board._id}`).emit("card:updated", { card });
+  res.json({ message: "Card updated", card });
 });
 
 exports.moveCard = asyncHandler(async (req, res) => {
-    const { cardId } = req.params;
-    const { targetColumnId, targetIndex } = req.body;
+  const { cardId } = req.params;
+  const { targetColumnId, targetIndex, version } = req.body;
+  if (!targetColumnId || !isValidId(cardId) || !isValidId(targetColumnId)) 
+    return res.status(400).json({ message: "Missing or invalid IDs" });
 
-    if (!targetColumnId) {
-      return res.status(400).json({ message: "targetColumnId is required" });
-    }
-    if (!isValidId(cardId)) {
-      return res.status(400).json({ message: "Invalid cardId" });
-    }
-    if (!isValidId(targetColumnId)) {
-      return res.status(400).json({ message: "Invalid targetColumnId" });
-    }
+  const access = await requireCardRole(cardId, req.user.id, "Editor");
+  if (access.status) return deny(res, access);
+  if (Number(version) && Number(version) !== access.card.version)
+    return res.status(409).json({ message: "Stale card version", card: access.card });
 
-    const card = await Card.findById(cardId);
-    if (!card) {
-      return res.status(404).json({ message: "Card not found" });
-    }
-    const sourceColumn = await Column.findById(card.column);
-    const targetColumn = await Column.findById(targetColumnId);
-    if (!targetColumn) {
-      return res.status(404).json({ message: "Target column not found" });
-    }
+  const targetAccess = await requireColumnRole(targetColumnId, req.user.id, "Editor");
+  if (targetAccess.status) return deny(res, targetAccess);
 
-    if (sourceColumn) {
-      sourceColumn.cardIds = sourceColumn.cardIds.filter(
-        (id) => id.toString() !== cardId
-      );
-      await sourceColumn.save();
-    }
-
-    const insertIndex =
-      typeof targetIndex === "number" && targetIndex >= 0
-        ? targetIndex
-        : targetColumn.cardIds.length;
-
-    targetColumn.cardIds.splice(insertIndex, 0, card._id);
-    await targetColumn.save();
-
-    card.column = targetColumnId;
-    await card.save();
-
-    await Activity.create({
-      card: card._id,
-      user: req.user?.id,
-      action: "CARD_MOVED",
-      details: `${card.title} moved`
+  const sourceColumnId = access.card.column.toString();
+  
+  // Update Column pointers
+  if (sourceColumnId !== targetColumnId) {
+    await Column.findByIdAndUpdate(sourceColumnId, { $pull: { cardIds: cardId } });
+    await Column.findByIdAndUpdate(targetColumnId, { 
+      $push: { cardIds: { $each: [cardId], $position: targetIndex || 0 } } 
     });
+  } else {
+    const col = await Column.findById(targetColumnId);
+    col.cardIds = col.cardIds.filter(id => id.toString() !== cardId);
+    col.cardIds.splice(targetIndex || 0, 0, cardId);
+    await col.save();
+  }
 
-    res.json({
-      message: "Card moved",
-      card
-    });
+  // Update Card metadata
+  const siblings = await Card.find({ column: targetColumnId, _id: { $ne: cardId } }).sort({ order: 1 }).lean();
+  access.card.column = targetColumnId;
+  access.card.order = rankForIndex(siblings, targetIndex || 0);
+  access.card.version += 1;
+  await access.card.save();
+
+  await createActivity(access.card, req.user.id, "CARD_MOVED", `${access.card.title} moved`);
+  const card = await populatedCard(Card.findById(cardId));
+  
+  req.app.get("io")?.to(`board:${access.board._id}`).emit("card:moved", {
+    card, sourceColumnId, targetColumnId, targetIndex: targetIndex || 0
+  });
+  res.json({ message: "Card moved", card });
 });
 
 exports.deleteCard = asyncHandler(async (req, res) => {
-    const { cardId } = req.params;
-    if (!isValidId(cardId)) {
-      return res.status(400).json({ message: "Invalid cardId" });
-    }
-    const card = await Card.findById(cardId);
-    if (!card) {
-      return res.status(404).json({ message: "Card not found" });
-    }
+  const { cardId } = req.params;
+  if (!isValidId(cardId)) return res.status(400).json({ message: "Invalid cardId" });
+  const access = await requireCardRole(cardId, req.user.id, "Editor");
+  if (access.status) return deny(res, access);
 
-    await Column.findByIdAndUpdate(card.column, {
-      $pull: { cardIds: card._id }
-    });
-    await Activity.deleteMany({ card: card._id });
-    await Card.findByIdAndDelete(card._id);
-
-    res.json({
-      message: "Card deleted"
-    });
+  await Column.findByIdAndUpdate(access.card.column, { $pull: { cardIds: access.card._id } });
+  await Activity.deleteMany({ card: access.card._id });
+  await Card.findByIdAndDelete(access.card._id);
+  req.app.get("io")?.to(`board:${access.board._id}`).emit("card:deleted", { cardId });
+  res.json({ message: "Card deleted" });
 });
